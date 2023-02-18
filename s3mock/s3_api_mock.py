@@ -1,6 +1,6 @@
 """Mock AWS boto3 results."""
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 import os
 import random
 import uuid
@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterator, List, Set
 import flask
 from flask import Flask
 
-from common.data import Recording
+from common.data import Recording, Chunk
 
 API_PORT = os.environ.get('API_PORT', 5000)
 
@@ -25,15 +25,14 @@ class S3ObjectsGenerator():
             yield f"recording-{uuid.uuid4()}"
 
 
-    def append_more_chunks(self, recording_id: str, random_chunks_number: int) -> None:
+    def generate_chunks_to_target(self, recording_id: str, random_chunks_number: int, prefix: str = "") -> None:
         """Append more chunks to existing record."""
         recording: Recording = self.objects_tree[recording_id]
-        last_chunk = recording.get_last_chunk()
+        last_chunk = recording.last_chunk
 
-        current_chunks = self.objects_tree[recording_id]
+        current_chunks = list(recording.artifacts)
 
-        self.objects_tree[recording_id] = (
-            *current_chunks, *[f"chunk{i}" for i in range(last_chunk.idx + 1, random_chunks_number)])
+        recording.artifacts = [*current_chunks, *[Chunk(f"{prefix}chunk{i}.mp4", i) for i in range(last_chunk.idx + 1, random_chunks_number)]]
 
 
     def update_tree(self, generated_recordings: List[str]) -> Dict[str, Set[str]]:
@@ -53,7 +52,7 @@ class S3ObjectsGenerator():
 
             # if recording already exists
             if recording_id in self.objects_tree:
-                chunks_dict = self.append_more_chunks(
+                chunks_dict = self.generate_chunks_to_target(
                     recording_id, random_chunks_number)
             # create new recording and chunks list
             else:
@@ -82,3 +81,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

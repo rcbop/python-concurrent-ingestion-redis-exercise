@@ -28,6 +28,8 @@ class Chunk(Artifact):
         assert m, 'Failed to parse chunk index'
         return int(m.groups()[0])
 
+    def __hash__(self):
+        return hash((self.obj_path, self.idx, self.ext))
 
 @dataclass
 class Signals(Artifact):
@@ -40,10 +42,11 @@ class Recording():
     artifacts: Set[Artifact] = field(default_factory=set)
 
     @property
-    def get_last_chunk(self) -> Chunk:
+    def last_chunk(self) -> Chunk:
         if len(self.artifacts) > 1:
-            return list(art for art in self.artifacts
-            if art.ext == FileExt.CHUNK)[-1]
+            chunks_list = list(art for art in self.artifacts
+            if art.ext == FileExt.CHUNK)
+            return chunks_list[len(chunks_list)-1]
 
         return list(art for art in self.artifacts
             if art.ext == FileExt.CHUNK)[0]
