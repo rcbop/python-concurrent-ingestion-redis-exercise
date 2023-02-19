@@ -3,3 +3,4 @@ data/*
 *.pyc
 **/*egg-info
 .pytest_cache
+.coverage

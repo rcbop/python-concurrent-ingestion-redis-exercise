@@ -1,5 +1,4 @@
 """Test redis shared dictionary."""
-import chunk
 import hashlib
 import json
 import os
@@ -8,6 +7,7 @@ import re
 import socket
 import time
 from typing import Dict, Iterable, List, Set
+from common.data import Chunk
 
 import redis
 import redis_lock
@@ -20,22 +20,32 @@ REDIS_PORT = os.environ.get("REDIS_PORT", 6379)
 REDIS_PASS = os.environ.get("REDIS_PASS")
 
 
-def stop_criteria(idx: int) -> bool:
+def stop_criteria(idx: int, choice: int = None) -> bool:
     """Random stop criteria to simulate recording upload ended.
 
     Either the index is divisible by 7 or 15.
     """
+    if choice:
+        return idx % choice == 0
     divisible_by = random.choice([7, 15])
     return idx % divisible_by == 0
+
+
+def get_last_chunk_index(chunks: List[str]) -> int:
+    last_chunk = chunks[-1]
+    if 'idx' in last_chunk:
+        return last_chunk['idx']
+
+    m = re.match(r'chunk(\d+)', last_chunk['obj_path'])
+    if not m:
+        raise RuntimeError(f"chunk name not valid {chunks[-1]}")
+    return int(m.groups()[0])
 
 
 def is_end_of_recording(chunks: List[str]) -> bool:
     """Take the last chunk and apply mocked stop criteria.
     """
-    m = re.match(r'chunk(\d+)', chunks[-1])
-    assert m, 'Failed to parse chunk index'
-    index = int(m.groups()[0])
-    return stop_criteria(index)
+    return stop_criteria(get_last_chunk_index(chunks))
 
 
 def update_shared_dictionary(conn: redis.StrictRedis, chunks_dict: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
@@ -55,13 +65,20 @@ def update_shared_dictionary(conn: redis.StrictRedis, chunks_dict: Dict[str, Set
         else:
             got_chunks = conn.get(record_id)
             if got_chunks:
-                chunks = set(chunks).union(json.loads(got_chunks))
-            conn.set(record_id, json.dumps(list(chunks)))
+                got_chunks = [Chunk(**chunk) for chunk in json.loads(got_chunks)]
+                current_chunks = [Chunk(**chunk) for chunk in chunks]
+                chunks = set(current_chunks).union(got_chunks)
+
+            chunks_to_store = [dict(chunk) for chunk in chunks]
+            conn.set(record_id, json.dumps(chunks_to_store))
 
     return ready_to_ingest
 
+
 def extract_chunks_hash(chunks: List[str]) -> str:
-    return hashlib.sha256(','.join(chunks).encode()).hexdigest()
+    """Extract chunks hash from list of chunks."""
+    paths = [chunk['obj_path'] for chunk in chunks]
+    return hashlib.sha256(','.join(paths).encode()).hexdigest()
 
 
 def panics_if_already_ingested(conn: redis.StrictRedis, lock_id: str, ready_to_ingest: Dict[str, Set[str]]) -> None:
@@ -97,14 +114,15 @@ def get_redis_conn(db_idx: int):
 
 
 def main():
-    print("wait 3s for redis bro...")
+    print("wait 3s for redis...")
     time.sleep(3)
     conn_main = get_redis_conn(0)
     conn_checker = get_redis_conn(1)
 
     while True:
         response = requests.get(f"http://{API_HOST}:{API_PORT}/get_s3_mocks/")
-        assert response.status_code == 200, "oh damn!"
+        if response.status_code != 200:
+            raise RuntimeError(f"API error {response.status_code}")
 
         chunks_dict = json.loads(response.content)
         lock_name = f"worker-{socket.gethostname()}"
